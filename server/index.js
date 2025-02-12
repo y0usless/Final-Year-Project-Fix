@@ -46,10 +46,10 @@ const s3 = new S3Client({
 })
 // Initialize DynamoDB client (adjust region as needed)
 const dynamoClient = new DynamoDBClient({
-    region: "us-east-1",
+    region: process.env.AWS_REGION,
     credentials: {
-        accessKeyId: 'AKIAWQUOZ5LZDSIXSC6R',
-        secretAccessKey: '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'
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
     }
 })
 
@@ -59,7 +59,7 @@ const roomStates = {};
 const upload = multer({
   storage: multerS3({
       s3: s3,
-      bucket: "myvideoplayer12313124",
+      bucket: process.env.AWS_S3_BUCKET,
       acl: 'public-read', // Set ACL for public access
       contentType: multerS3.AUTO_CONTENT_TYPE,
       key: (req, file, cb) => {
@@ -191,7 +191,7 @@ app.post("/api/get-presigned-url", async (req, res) => {
     console.log("Generating presigned URL for:", filename);
 
     const s3Params = {
-      Bucket: "myvideoplayer12313124",
+      Bucket: process.env.AWS_S3_BUCKET,
       Key: `${filename}`,
       ContentType: contentType,
     };
@@ -218,7 +218,7 @@ app.post('/upload', upload.single('video'), async (req, res) => {
       const fileUrl = req.file.location;
 
       const params = {
-          TableName: "Videos",
+          TableName: process.env.DYNAMODB_TABLE_VID,
           Item: {
               id: { S: Date.now().toString() },
               videoName: { S: fileName },
@@ -239,7 +239,7 @@ app.post('/upload', upload.single('video'), async (req, res) => {
 // Endpoint to scan the DynamoDB table for room/video info.
 app.get('/scan', async (req, res) => {
   try {
-    const command = new ScanCommand({ TableName: 'Rooms' });
+    const command = new ScanCommand({ TableName: process.env.DYNAMODB_TABLE_ROOM });
     const response = await dynamoClient.send(command);
     const items = response.Items.map(item => unmarshall(item));
     res.json({
