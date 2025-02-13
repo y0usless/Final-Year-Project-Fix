@@ -32,16 +32,16 @@ const io = new Server(server, {
 });
 
 AWS.config.update({
-  accessKeyId: 'AKIAWQUOZ5LZDSIXSC6R',
-  secretAccessKey: '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',
-  region: "us-east-1"
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION
 })
 
 const s3 = new S3Client({
-  region: "us-east-1",
+  region: process.env.AWS_REGION,
     credentials: {
-        accessKeyId: 'AKIAWQUOZ5LZDSIXSC6R',
-        secretAccessKey: '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'
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
     },
 })
 // Initialize DynamoDB client (adjust region as needed)
