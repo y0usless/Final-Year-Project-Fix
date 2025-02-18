@@ -11,6 +11,8 @@ const multerS3 = require('multer-s3');
 const AWS = require('aws-sdk');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { S3Client, PutObjectCommand, ListObjectsV2Command} = require('@aws-sdk/client-s3')
+const { createClient } = require('redis');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
 const app = express();
 
@@ -52,6 +54,33 @@ const dynamoClient = new DynamoDBClient({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
     }
 })
+
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const redisClient = createClient({ url: redisUrl });
+
+redisClient.connect()
+  .then(() => console.log('Connected to Redis'))
+  .catch(console.error);
+
+const pubClient = redisClient.duplicate();
+const subClient = redisClient.duplicate();
+
+Promise.all([pubClient.connect(), subClient.connect()])
+  .then(() => {
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('Socket.IO Redis adapter is set up');
+  })
+  .catch(console.error);
+
+async function getRoomState(room) {
+  const state = await redisClient.get(`roomState:${room}`);
+  return state ? JSON.parse(state) : null;
+}
+
+async function setRoomState(room, state) {
+  // Set the state with a TTL of 3600 seconds (1 hour)
+  await redisClient.set(`roomState:${room}`, JSON.stringify(state), { EX: 3600 });
+}
 
 // In‑memory store for room playback state.
 const roomStates = {};
@@ -144,6 +173,16 @@ app.get("/api/list-videos", async (req, res) => {
   } catch (error) {
     console.error("❌ Error fetching videos:", error);
     res.status(500).json({ error: "Internal Server Error", details: error.message });
+  }
+});
+
+app.get('/', async (req, res) => {
+  try {
+    await redisClient.set('message', 'Hello from Redis!');
+    const message = await redisClient.get('message');
+    res.send(`Redis Message: ${message}`);
+  } catch (error) {
+    res.status(500).send(`Error: ${error.message}`);
   }
 });
 
@@ -258,43 +297,59 @@ app.get('/scan', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join-room', (room) => {
+  // When a client joins a room
+  socket.on('join-room', async (room) => {
     socket.join(room);
     console.log(`Socket ${socket.id} joined room ${room}`);
-    const currentState = roomStates[room] || { currentTime: 0, playing: false };
-    roomStates[room] = currentState;
+    
+    // Fetch the current room state from Redis, or initialize a default state.
+    let currentState = await getRoomState(room);
+    if (!currentState) {
+      currentState = { currentTime: 0, playing: false };
+      await setRoomState(room, currentState);
+    }
+    // Send the current state to the joining client.
     socket.emit('sync-video', currentState);
   });
 
-  socket.on('video-play', (data) => {
+  // When a client emits a play event
+  socket.on('video-play', async (data) => {
     console.log('Received video-play:', data);
     if (data.room) {
-      roomStates[data.room] = { currentTime: data.currentTime, playing: true };
+      const newState = { currentTime: data.currentTime, playing: true };
+      await setRoomState(data.room, newState);
       socket.to(data.room).emit('video-play', data);
     }
   });
 
-  socket.on('video-pause', (data) => {
+  // When a client emits a pause event
+  socket.on('video-pause', async (data) => {
     console.log('Received video-pause:', data);
     if (data.room) {
-      roomStates[data.room] = { currentTime: data.currentTime, playing: false };
+      const newState = { currentTime: data.currentTime, playing: false };
+      await setRoomState(data.room, newState);
       socket.to(data.room).emit('video-pause', data);
     }
   });
 
-  socket.on('video-seek', (data) => {
+  // When a client emits a seek event
+  socket.on('video-seek', async (data) => {
     console.log('Received video-seek:', data);
     if (data.room) {
-      const prevState = roomStates[data.room] || { currentTime: 0, playing: false };
-      roomStates[data.room] = { currentTime: data.currentTime, playing: prevState.playing };
+      const prevState = (await getRoomState(data.room)) || { currentTime: 0, playing: false };
+      const newState = { currentTime: data.currentTime, playing: prevState.playing };
+      await setRoomState(data.room, newState);
       socket.to(data.room).emit('video-seek', data);
     }
   });
 
+  // Optionally, you can clear stale state when no clients are left in a room.
+  // For a distributed system, it may be easier to rely on TTL for cleanup.
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
   });
 });
+
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
